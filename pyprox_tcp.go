@@ -1,9 +1,9 @@
 package main
 
 import (
+"bufio"
 "flag"
 "fmt"
-"io"
 "log"
 "net"
 "os"
@@ -25,12 +25,12 @@ acceptTimeSleep  time.Duration
 )
 
 func init() {
-flag.IntVar(&listenPort, "listenPort", 8080, "Listen port")
-flag.StringVar(&cloudflareIP, "cloudflareIP", "1.1.1.1", "Cloudflare IP")
-flag.IntVar(&cloudflarePort, "cloudflarePort", 80, "Cloudflare port")
-flag.IntVar(&lFragment, "lFragment", 1024, "Fragment length")
-flag.DurationVar(&fragmentSleep, "fragmentSleep", 10*time.Millisecond, "Fragment sleep duration")
-flag.DurationVar(&socketTimeout, "socketTimeout", 10*time.Second, "Socket timeout")
+flag.IntVar(&listenPort, "listenPort", 2500, "Listen port")
+flag.StringVar(&cloudflareIP, "cloudflareIP", "104.21.12.42", "Cloudflare IP")
+flag.IntVar(&cloudflarePort, "cloudflarePort", 443, "Cloudflare port")
+flag.IntVar(&lFragment, "lFragment", 77, "Fragment length")
+flag.DurationVar(&fragmentSleep, "fragmentSleep", 200*time.Millisecond, "Fragment sleep duration")
+flag.DurationVar(&socketTimeout, "socketTimeout", 60*time.Second, "Socket timeout")
 flag.DurationVar(&firstTimeSleep, "firstTimeSleep", 10*time.Millisecond, "First time sleep duration")
 flag.DurationVar(&acceptTimeSleep, "acceptTimeSleep", 10*time.Millisecond, "Accept time sleep duration")
 }
