@@ -1,14 +1,12 @@
 package main
 
 import (
-"bufio"
 "flag"
 "fmt"
+"io"
 "log"
 "net"
-"os"
 "strconv"
-"strings"
 "sync"
 "time"
 )
@@ -129,7 +127,7 @@ time.Sleep(acceptTimeSleep)
 var wg sync.WaitGroup
 wg.Add(2)
 go handleUpstream(clientConn, &wg)
-go handleDownstream(clientConn, backendConn, &wg)
+go handleDownstream(clientConn, clientConn, &wg)
 wg.Wait()
 }
 }
