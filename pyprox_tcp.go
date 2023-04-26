@@ -1,133 +1,135 @@
 package main
 
 import (
+"flag"
 "fmt"
 "io"
-"math/rand"
+"log"
 "net"
 "os"
 "strconv"
 "strings"
 "sync"
 "time"
-
-"github.com/go-ini/ini"
 )
 
 var (
-listenPort        int
-cloudflareIPs     []string
-cloudflarePort    int
-lFragment         int
-fragmentSleep     time.Duration
-socketTimeout     time.Duration
-firstTimeSleep    time.Duration
-acceptTimeSleep   time.Duration
-ipMutex           sync.Mutex
-bufferPool        sync.Pool
+listenPort       int
+cloudflareIP     string
+cloudflarePort   int
+lFragment        int
+fragmentSleep    time.Duration
+socketTimeout    time.Duration
+firstTimeSleep   time.Duration
+acceptTimeSleep  time.Duration
 )
 
-func main() {
-loadConfig("config.ini")
-
-bufferPool = sync.Pool{
-New: func() interface{} {
-return make([]byte, 16384)
-},
+func init() {
+flag.IntVar(&listenPort, "listenPort", 8080, "Listen port")
+flag.StringVar(&cloudflareIP, "cloudflareIP", "1.1.1.1", "Cloudflare IP")
+flag.IntVar(&cloudflarePort, "cloudflarePort", 80, "Cloudflare port")
+flag.IntVar(&lFragment, "lFragment", 1024, "Fragment length")
+flag.DurationVar(&fragmentSleep, "fragmentSleep", 10*time.Millisecond, "Fragment sleep duration")
+flag.DurationVar(&socketTimeout, "socketTimeout", 10*time.Second, "Socket timeout")
+flag.DurationVar(&firstTimeSleep, "firstTimeSleep", 10*time.Millisecond, "First time sleep duration")
+flag.DurationVar(&acceptTimeSleep, "acceptTimeSleep", 10*time.Millisecond, "Accept time sleep duration")
 }
 
-rand.Seed(time.Now().UnixNano())
-listener, err := net.Listen("tcp", fmt.Sprintf(":%d", listenPort))
-if err != nil {
-fmt.Printf("Error listening on port %d: %v\n", listenPort, err)
-os.Exit(1)
-}
-defer listener.Close()
-
-fmt.Printf("Proxy server listening on 127.0.0.1:%d\n", listenPort)
-
-for {
-clientConn, err := listener.Accept()
-if err != nil {
-fmt.Printf("Error accepting connection: %v\n", err)
-continue
-}
-
-go handleClient(clientConn)
-}
-}
-
-func handleClient(clientConn net.Conn) {
-defer clientConn.Close()
-clientConn.SetDeadline(time.Now().Add(socketTimeout))
-time.Sleep(acceptTimeSleep)
-
-data := bufferPool.Get().([]byte)
-defer bufferPool.Put(data)
-
-n, err := clientConn.Read(data)
-if err != nil {
-fmt.Printf("Error reading from client: %v\n", err)
-return
-}
-
-backendIP := getNextBackendIP()
-fmt.Printf("Using backend IP: %s\n", backendIP)
-
-backendConn, err := net.DialTimeout("tcp", net.JoinHostPort(backendIP, strconv.Itoa(cloudflarePort)), socketTimeout)
-if err != nil {
-fmt.Printf("Error connecting to backend: %v\n", err)
-return
-}
-defer backendConn.Close()
-
-go func() {
-buf := bufferPool.Get().([]byte)
-defer bufferPool.Put(buf)
-
-io.CopyBuffer(clientConn, backendConn, buf)
-}()
-
-sendDataInFragments(data[:n], backendConn)
-}
-
-func sendDataInFragments(data []byte, conn net.Conn) {
+func sendFragmentedData(data []byte, conn net.Conn) {
 for i := 0; i < len(data); i += lFragment {
 end := i + lFragment
 if end > len(data) {
 end = len(data)
 }
-fragmentData := data[i:end]
-conn.Write(fragmentData)
+fragment := data[i:end]
+conn.Write(fragment)
 time.Sleep(fragmentSleep)
 }
 }
 
-func getNextBackendIP() string {
-ipMutex.Lock()
-defer ipMutex.Unlock()
+func handleUpstream(clientConn net.Conn, wg *sync.WaitGroup) {
+defer wg.Done()
+defer clientConn.Close()
 
-selectedIP := cloudflareIPs[rand.Intn(len(cloudflareIPs))]
-cloudflareIPs = append(cloudflareIPs[1:], selectedIP)
-return selectedIP
-}
-
-func loadConfig(configPath string) {
-cfg, err := ini.Load(configPath)
+firstFlag := true
+backendConn, err := net.DialTimeout("tcp", net.JoinHostPort(cloudflareIP, strconv.Itoa(cloudflarePort)), socketTimeout)
 if err != nil {
-fmt.Printf("Error loading config file: %v\n", err)
-os.Exit(1)
+log.Printf("[UPSTREAM] %v", err)
+return
+}
+defer backendConn.Close()
+
+for {
+if firstFlag {
+firstFlag = false
+time.Sleep(firstTimeSleep)
+data := make([]byte, 16384)
+n, err := clientConn.Read(data)
+if err != nil {
+if err != io.EOF {
+log.Printf("[UPSTREAM] %v", err)
+}
+return
+}
+data = data[:n]
+sendFragmentedData(data, backendConn)
+} else {
+data := make([]byte, 4096)
+n, err := clientConn.Read(data)
+if err != nil {
+if err != io.EOF {
+log.Printf("[UPSTREAM] %v", err)
+}
+return
+}
+data = data[:n]
+backendConn.Write(data)
+}
+}
 }
 
-listenPort = cfg.Section("settings").Key("listen_PORT").MustInt(2500)
-cloudflareIPs = strings.Split(cfg.Section("settings").Key("Cloudflare_IP").String(), ",")
-for i := range cloudflareIPs {
-cloudflareIPs[i] = strings.TrimSpace(cloudflareIPs[i])
+func handleDownstream(clientConn, backendConn net.Conn, wg *sync.WaitGroup) {
+defer wg.Done()
+
+for {
+data := make([]byte, 4096)
+n, err := backendConn.Read(data)
+if err != nil {
+if err != io.EOF {
+log.Printf("[DOWNSTREAM] %v", err)
 }
-cloudflarePort = cfg.Section("settings").Key("Cloudflare_port").MustInt(443)
-lFragment = cfg.Section("settings").Key("L_fragment").MustInt(77)
-fragmentSleep = time.Duration(cfg.Section("settings").Key("fragment_sleep").MustFloat64(0.2) * float64(time.Second))
-socketTimeout = time.Duration(cfg.Section("settings").Key("my_socket_timeout").MustInt(60)) * time.Second
-firstTimeSleep = time.Duration(cfg.Section("settings").Key("first_time_sleep").MustFloat64(0.01) * float64(time.Second))
-acceptTimeSleep = time.Duration(cfg.Section("settings").Key("accept_time_sleep").MustFloat64(0.01) * float64(time.Second))
+return
+}
+data = data[:n]
+clientConn.Write(data)
+}
+}
+
+func main() {
+flag.Parse()
+
+listenAddr := net.JoinHostPort("127.0.0.1", strconv.Itoa(listenPort))
+ln, err := net.Listen("tcp", listenAddr)
+if err != nil {
+log.Fatalf("Error listening on %s: %v", listenAddr, err)
+}
+defer ln.Close()
+
+fmt.Printf("Now listening at: %s, forwarding to %s:%d\n", listenAddr, cloudflareIP, cloudflarePort)
+
+for {
+clientConn, err := ln.Accept()
+if err != nil {
+log.Printf("Error accepting connection: %v", err)
+continue
+}
+clientConn.SetDeadline(time.Now().Add(socketTimeout))
+time.Sleep(acceptTimeSleep)
+
+var wg sync.WaitGroup
+wg.Add(2)
+go handleUpstream(clientConn, &wg)
+go handleDownstream(clientConn, backendConn, &wg)
+wg.Wait()
+}
 }
