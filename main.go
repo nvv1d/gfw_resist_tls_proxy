@@ -40,7 +40,11 @@ if end > len(data) {
 end = len(data)
 }
 fragment := data[i:end]
-conn.Write(fragment)
+_, err := conn.Write(fragment)
+if err != nil {
+log.Printf("[FRAGMENTATION] Error writing data to connection: %v", err)
+return
+}
 time.Sleep(fragmentSleep)
 }
 }
@@ -81,7 +85,11 @@ log.Printf("[UPSTREAM] %v", err)
 return
 }
 data = data[:n]
-backendConn.Write(data)
+_, err = backendConn.Write(data)
+if err != nil {
+log.Printf("[UPSTREAM] Error writing data to connection: %v", err)
+return
+}
 }
 }
 }
@@ -99,7 +107,11 @@ log.Printf("[DOWNSTREAM] %v", err)
 return
 }
 data = data[:n]
-clientConn.Write(data)
+_, err = clientConn.Write(data)
+if err != nil {
+log.Printf("[DOWNSTREAM] Error writing data to connection: %v", err)
+return
+}
 }
 }
 
